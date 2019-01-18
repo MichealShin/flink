@@ -28,6 +28,7 @@ import org.apache.flink.streaming.api.operators.LegacyKeyedProcessOperator
 import org.apache.flink.table.api.StreamQueryConfig
 import org.apache.flink.table.runtime.aggregate.ProcessFunctionWithCleanupState
 import org.apache.flink.table.runtime.harness.HarnessTestBase
+import org.apache.flink.table.runtime.harness.HarnessTestBase.TestStreamQueryConfig
 import org.apache.flink.util.Collector
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -36,8 +37,7 @@ class ProcessFunctionWithCleanupStateTest extends HarnessTestBase {
 
   @Test
   def testStateCleaning(): Unit = {
-    val queryConfig = new StreamQueryConfig()
-      .withIdleStateRetentionTime(Time.milliseconds(5), Time.milliseconds(10))
+    val queryConfig = new TestStreamQueryConfig(Time.milliseconds(5), Time.milliseconds(10))
 
     val func = new MockedProcessFunction(queryConfig)
     val operator = new LegacyKeyedProcessOperator(func)
@@ -110,7 +110,7 @@ private class MockedProcessFunction(queryConfig: StreamQueryConfig)
       out: Collector[String]): Unit = {
 
     val curTime = ctx.timerService().currentProcessingTime()
-    registerProcessingCleanupTimer(ctx, curTime)
+    processCleanupTimer(ctx, curTime)
     state.update(value._2)
   }
 
@@ -119,7 +119,7 @@ private class MockedProcessFunction(queryConfig: StreamQueryConfig)
       ctx: ProcessFunction[(String, String), String]#OnTimerContext,
       out: Collector[String]): Unit = {
 
-    if (needToCleanupState(timestamp)) {
+    if (stateCleaningEnabled) {
       cleanupState(state)
     }
   }

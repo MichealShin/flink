@@ -24,6 +24,8 @@ import org.apache.flink.annotation.docs.Documentation;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
+import org.apache.flink.configuration.description.Formatter;
+import org.apache.flink.configuration.description.HtmlFormatter;
 import org.apache.flink.docs.configuration.data.TestCommonOptions;
 import org.apache.flink.util.FileUtils;
 
@@ -235,6 +237,7 @@ public class ConfigOptionsDocGeneratorTest {
 		};
 
 		ConfigOptionsDocGenerator.generateCommonSection(projectRootDir, outputDirectory, locations, "src/test/java");
+		Formatter formatter = new HtmlFormatter();
 
 		String expected =
 			"<table class=\"table table-bordered\">\n" +
@@ -249,12 +252,12 @@ public class ConfigOptionsDocGeneratorTest {
 			"        <tr>\n" +
 			"            <td><h5>" + TestCommonOptions.COMMON_POSITIONED_OPTION.key() + "</h5></td>\n" +
 			"            <td style=\"word-wrap: break-word;\">" + TestCommonOptions.COMMON_POSITIONED_OPTION.defaultValue() + "</td>\n" +
-			"            <td>" + TestCommonOptions.COMMON_POSITIONED_OPTION.description() + "</td>\n" +
+			"            <td>" + formatter.format(TestCommonOptions.COMMON_POSITIONED_OPTION.description()) + "</td>\n" +
 			"        </tr>\n" +
 			"        <tr>\n" +
 			"            <td><h5>" + TestCommonOptions.COMMON_OPTION.key() + "</h5></td>\n" +
 			"            <td style=\"word-wrap: break-word;\">" + TestCommonOptions.COMMON_OPTION.defaultValue() + "</td>\n" +
-			"            <td>" + TestCommonOptions.COMMON_OPTION.description() + "</td>\n" +
+			"            <td>" + formatter.format(TestCommonOptions.COMMON_OPTION.description()) + "</td>\n" +
 			"        </tr>\n" +
 			"    </tbody>\n" +
 			"</table>\n";
@@ -262,5 +265,46 @@ public class ConfigOptionsDocGeneratorTest {
 		String output = FileUtils.readFile(Paths.get(outputDirectory, ConfigOptionsDocGenerator.COMMON_SECTION_FILE_NAME).toFile(), StandardCharsets.UTF_8.name());
 
 		assertEquals(expected, output);
+	}
+
+	static class TestConfigGroupWithExclusion {
+		public static ConfigOption<Integer> firstOption = ConfigOptions
+			.key("first.option.a")
+			.defaultValue(2)
+			.withDescription("This is example description for the first option.");
+
+		@Documentation.ExcludeFromDocumentation
+		public static ConfigOption<String> excludedOption = ConfigOptions
+			.key("excluded.option.a")
+			.noDefaultValue()
+			.withDescription("This should not be documented.");
+	}
+
+	/**
+	 * Tests that {@link ConfigOption} annotated with {@link Documentation.ExcludeFromDocumentation}
+	 * are not documented.
+	 */
+	@Test
+	public void testConfigOptionExclusion() {
+		final String expectedTable =
+			"<table class=\"table table-bordered\">\n" +
+				"    <thead>\n" +
+				"        <tr>\n" +
+				"            <th class=\"text-left\" style=\"width: 20%\">Key</th>\n" +
+				"            <th class=\"text-left\" style=\"width: 15%\">Default</th>\n" +
+				"            <th class=\"text-left\" style=\"width: 65%\">Description</th>\n" +
+				"        </tr>\n" +
+				"    </thead>\n" +
+				"    <tbody>\n" +
+				"        <tr>\n" +
+				"            <td><h5>first.option.a</h5></td>\n" +
+				"            <td style=\"word-wrap: break-word;\">2</td>\n" +
+				"            <td>This is example description for the first option.</td>\n" +
+				"        </tr>\n" +
+				"    </tbody>\n" +
+				"</table>\n";
+		final String htmlTable = ConfigOptionsDocGenerator.generateTablesForClass(TestConfigGroupWithExclusion.class).get(0).f1;
+
+		assertEquals(expectedTable, htmlTable);
 	}
 }

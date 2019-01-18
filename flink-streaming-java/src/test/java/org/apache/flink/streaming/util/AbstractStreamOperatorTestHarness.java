@@ -80,6 +80,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import static org.apache.flink.util.Preconditions.checkState;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -138,16 +139,9 @@ public class AbstractStreamOperatorTestHarness<OUT> implements AutoCloseable {
 			int subtaskIndex) throws Exception {
 		this(
 			operator,
-			new MockEnvironmentBuilder()
-				.setTaskName("MockTask")
-				.setMemorySize(3 * 1024 * 1024)
-				.setInputSplitProvider(new MockInputSplitProvider())
-				.setBufferSize(1024)
-				.setMaxParallelism(maxParallelism)
-				.setParallelism(parallelism)
-				.setSubtaskIndex(subtaskIndex)
-				.build(),
-			true,
+			maxParallelism,
+			parallelism,
+			subtaskIndex,
 			new OperatorID());
 	}
 
@@ -346,6 +340,14 @@ public class AbstractStreamOperatorTestHarness<OUT> implements AutoCloseable {
 		initializeState(operatorStateHandles, null);
 	}
 
+	public void initializeState(String operatorStateSnapshotPath) throws Exception {
+		initializeState(OperatorSnapshotUtil.readStateHandle(operatorStateSnapshotPath));
+	}
+
+	public void initializeEmptyState() throws Exception {
+		initializeState((OperatorSubtaskState) null);
+	}
+
 	/**
 	 * Calls {@link org.apache.flink.streaming.api.operators.StreamOperator#initializeState()}.
 	 * Calls {@link org.apache.flink.streaming.api.operators.StreamOperator#setup(StreamTask, StreamConfig, Output)}
@@ -359,6 +361,8 @@ public class AbstractStreamOperatorTestHarness<OUT> implements AutoCloseable {
 		OperatorSubtaskState jmOperatorStateHandles,
 		OperatorSubtaskState tmOperatorStateHandles) throws Exception {
 
+		checkState(!initializeCalled, "TestHarness has already been initialized. Have you " +
+			"opened this harness before initializing it?");
 		if (!setupCalled) {
 			setup();
 		}
@@ -489,7 +493,7 @@ public class AbstractStreamOperatorTestHarness<OUT> implements AutoCloseable {
 	 */
 	public void open() throws Exception {
 		if (!initializeCalled) {
-			initializeState(null);
+			initializeEmptyState();
 		}
 		operator.open();
 	}

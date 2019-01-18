@@ -24,6 +24,7 @@ import org.apache.flink.api.common.typeutils.CompositeTypeSerializerConfigSnapsh
 import org.apache.flink.api.common.typeutils.TypeDeserializerAdapter;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.UnloadableDummyTypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.cep.nfa.compiler.NFAStateNameHandler;
@@ -50,6 +51,8 @@ import java.util.stream.Collectors;
 public class SharedBuffer<V> {
 
 	private final Map<Tuple2<String, ValueTimeWrapper<V>>, NodeId> mappingContext;
+	/** Run number (first block in DeweyNumber) -> EventId. */
+	private Map<Integer, EventId> starters;
 	private final Map<EventId, Lockable<V>> eventsBuffer;
 	private final Map<NodeId, Lockable<SharedBufferNode>> pages;
 
@@ -64,16 +67,22 @@ public class SharedBuffer<V> {
 	public SharedBuffer(
 			Map<EventId, Lockable<V>> eventsBuffer,
 			Map<NodeId, Lockable<SharedBufferNode>> pages,
-			Map<Tuple2<String, ValueTimeWrapper<V>>, NodeId> mappingContext) {
+			Map<Tuple2<String, ValueTimeWrapper<V>>, NodeId> mappingContext,
+			Map<Integer, EventId> starters) {
 
 		this.eventsBuffer = eventsBuffer;
 		this.pages = pages;
 		this.mappingContext = mappingContext;
+		this.starters = starters;
 	}
 
 	public NodeId getNodeId(String prevState, long timestamp, int counter, V event) {
 		return mappingContext.get(Tuple2.of(NFAStateNameHandler.getOriginalNameFromInternal(prevState),
 			new ValueTimeWrapper<>(event, timestamp, counter)));
+	}
+
+	public EventId getStartEventId(int run) {
+		return starters.get(run);
 	}
 
 	/**
@@ -149,7 +158,8 @@ public class SharedBuffer<V> {
 	/**
 	 * The {@link TypeSerializerConfigSnapshot} serializer configuration to be stored with the managed state.
 	 */
-	public static final class SharedBufferSerializerConfigSnapshot<K, V> extends CompositeTypeSerializerConfigSnapshot {
+	public static final class SharedBufferSerializerConfigSnapshot<K, V>
+			extends CompositeTypeSerializerConfigSnapshot<SharedBuffer<V>> {
 
 		private static final int VERSION = 1;
 
@@ -284,6 +294,7 @@ public class SharedBuffer<V> {
 			// read the edges of the shared buffer entries
 			int totalEdges = source.readInt();
 
+			Map<Integer, EventId> starters = new HashMap<>();
 			for (int j = 0; j < totalEdges; j++) {
 				int sourceIdx = source.readInt();
 
@@ -297,11 +308,14 @@ public class SharedBuffer<V> {
 				Tuple2<NodeId, Lockable<SharedBufferNode>> targetEntry =
 					targetIdx < 0 ? Tuple2.of(null, null) : entries.get(targetIdx);
 				sourceEntry.f1.getElement().addEdge(new SharedBufferEdge(targetEntry.f0, version));
+				if (version.length() == 1) {
+					starters.put(version.getRun(), sourceEntry.f0.getEventId());
+				}
 			}
 
 			Map<NodeId, Lockable<SharedBufferNode>> entriesMap = entries.stream().collect(Collectors.toMap(e -> e.f0, e -> e.f1));
 
-			return new SharedBuffer<>(valuesWithIds, entriesMap, mappingContext);
+			return new SharedBuffer<>(valuesWithIds, entriesMap, mappingContext, starters);
 		}
 
 		@Override
@@ -342,7 +356,7 @@ public class SharedBuffer<V> {
 		}
 
 		@Override
-		public TypeSerializerConfigSnapshot snapshotConfiguration() {
+		public TypeSerializerConfigSnapshot<SharedBuffer<V>> snapshotConfiguration() {
 			return new SharedBufferSerializerConfigSnapshot<>(
 				keySerializer,
 				valueSerializer,
@@ -352,8 +366,8 @@ public class SharedBuffer<V> {
 		@Override
 		public CompatibilityResult<SharedBuffer<V>> ensureCompatibility(TypeSerializerConfigSnapshot configSnapshot) {
 			if (configSnapshot instanceof SharedBufferSerializerConfigSnapshot) {
-				List<Tuple2<TypeSerializer<?>, TypeSerializerConfigSnapshot>> serializerConfigSnapshots =
-					((SharedBufferSerializerConfigSnapshot) configSnapshot).getNestedSerializersAndConfigs();
+				List<Tuple2<TypeSerializer<?>, TypeSerializerSnapshot<?>>> serializerConfigSnapshots =
+					((SharedBufferSerializerConfigSnapshot<?, ?>) configSnapshot).getNestedSerializersAndConfigs();
 
 				CompatibilityResult<K> keyCompatResult = CompatibilityUtil.resolveCompatibilityResult(
 					serializerConfigSnapshots.get(0).f0,

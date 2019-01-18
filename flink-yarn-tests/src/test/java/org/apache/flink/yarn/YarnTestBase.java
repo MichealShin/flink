@@ -18,9 +18,9 @@
 
 package org.apache.flink.yarn;
 
+import org.apache.flink.api.common.time.Deadline;
 import org.apache.flink.client.cli.CliFrontend;
 import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.runtime.clusterframework.BootstrapTools;
 import org.apache.flink.test.util.TestBaseUtils;
@@ -32,6 +32,7 @@ import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.service.Service;
 import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.ContainerId;
@@ -55,6 +56,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.io.ByteArrayOutputStream;
@@ -67,21 +69,20 @@ import java.io.InputStream;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 import java.io.PrintStream;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Pattern;
-
-import static org.apache.flink.test.util.MiniClusterResource.CODEBASE_KEY;
-import static org.apache.flink.test.util.MiniClusterResource.NEW_CODEBASE;
+import java.util.stream.Collectors;
 
 /**
  * This base class allows to use the MiniYARNCluster.
@@ -153,7 +154,7 @@ public abstract class YarnTestBase extends TestLogger {
 
 	protected org.apache.flink.configuration.Configuration flinkConfiguration;
 
-	protected boolean isNewMode;
+	protected final boolean isNewMode = true;
 
 	static {
 		YARN_CONFIGURATION = new YarnConfiguration();
@@ -189,38 +190,53 @@ public abstract class YarnTestBase extends TestLogger {
 		conf.set("hadoop.security.auth_to_local", "RULE:[1:$1] RULE:[2:$1]");
 	}
 
-	/**
-	 * Sleep a bit between the tests (we are re-using the YARN cluster for the tests).
-	 */
-	@After
-	public void sleep() {
-		try {
-			Thread.sleep(500);
-		} catch (InterruptedException e) {
-			Assert.fail("Should not happen");
-		}
-	}
-
 	@Before
-	public void checkClusterEmpty() throws IOException, YarnException {
+	public void checkClusterEmpty() {
 		if (yarnClient == null) {
 			yarnClient = YarnClient.createYarnClient();
 			yarnClient.init(getYarnConfiguration());
 			yarnClient.start();
 		}
 
-		List<ApplicationReport> apps = yarnClient.getApplications();
-		for (ApplicationReport app : apps) {
-			if (app.getYarnApplicationState() != YarnApplicationState.FINISHED
-					&& app.getYarnApplicationState() != YarnApplicationState.KILLED
-					&& app.getYarnApplicationState() != YarnApplicationState.FAILED) {
-				Assert.fail("There is at least one application on the cluster is not finished." +
-						"App " + app.getApplicationId() + " is in state " + app.getYarnApplicationState());
+		flinkConfiguration = new org.apache.flink.configuration.Configuration(globalConfiguration);
+	}
+
+	/**
+	 * Sleep a bit between the tests (we are re-using the YARN cluster for the tests).
+	 */
+	@After
+	public void sleep() throws IOException, YarnException {
+		Deadline deadline = Deadline.now().plus(Duration.ofSeconds(10));
+
+		boolean isAnyJobRunning = yarnClient.getApplications().stream()
+			.anyMatch(YarnTestBase::isApplicationRunning);
+
+		while (deadline.hasTimeLeft() && isAnyJobRunning) {
+			try {
+				Thread.sleep(500);
+			} catch (InterruptedException e) {
+				Assert.fail("Should not happen");
 			}
+			isAnyJobRunning = yarnClient.getApplications().stream()
+				.anyMatch(YarnTestBase::isApplicationRunning);
 		}
 
-		flinkConfiguration = new org.apache.flink.configuration.Configuration(globalConfiguration);
-		isNewMode = Objects.equals(NEW_CODEBASE, System.getProperty(CODEBASE_KEY));
+		if (isAnyJobRunning) {
+			final List<String> runningApps = yarnClient.getApplications().stream()
+				.filter(YarnTestBase::isApplicationRunning)
+				.map(app -> "App " + app.getApplicationId() + " is in state " + app.getYarnApplicationState() + '.')
+				.collect(Collectors.toList());
+			if (!runningApps.isEmpty()) {
+				Assert.fail("There is at least one application on the cluster that is not finished." + runningApps);
+			}
+		}
+	}
+
+	private static boolean isApplicationRunning(ApplicationReport app) {
+		final YarnApplicationState yarnApplicationState = app.getYarnApplicationState();
+		return yarnApplicationState != YarnApplicationState.FINISHED
+			&& app.getYarnApplicationState() != YarnApplicationState.KILLED
+			&& app.getYarnApplicationState() != YarnApplicationState.FAILED;
 	}
 
 	@Nullable
@@ -253,6 +269,19 @@ public abstract class YarnTestBase extends TestLogger {
 			}
 		}
 		return null;
+	}
+
+	@Nonnull
+	YarnClusterDescriptor createYarnClusterDescriptor(org.apache.flink.configuration.Configuration flinkConfiguration) {
+		final YarnClusterDescriptor yarnClusterDescriptor = new YarnClusterDescriptor(
+			flinkConfiguration,
+			YARN_CONFIGURATION,
+			CliFrontend.getConfigurationDirectoryFromEnv(),
+			yarnClient,
+			true);
+		yarnClusterDescriptor.setLocalJarPath(new Path(flinkUberjar.toURI()));
+		yarnClusterDescriptor.addShipFiles(Collections.singletonList(flinkLibFolder));
+		return yarnClusterDescriptor;
 	}
 
 	/**
@@ -535,9 +564,6 @@ public abstract class YarnTestBase extends TestLogger {
 
 			FileUtils.copyDirectory(new File(confDirPath), tempConfPathForSecureRun);
 
-			globalConfiguration.setString(CoreOptions.MODE,
-				Objects.equals(NEW_CODEBASE, System.getProperty(CODEBASE_KEY)) ? CoreOptions.NEW_MODE : CoreOptions.LEGACY_MODE);
-
 			BootstrapTools.writeConfiguration(
 				globalConfiguration,
 				new File(tempConfPathForSecureRun, "flink-conf.yaml"));
@@ -573,7 +599,7 @@ public abstract class YarnTestBase extends TestLogger {
 	 * Default @BeforeClass impl. Overwrite this for passing a different configuration
 	 */
 	@BeforeClass
-	public static void setup() {
+	public static void setup() throws Exception {
 		startYARNWithConfig(YARN_CONFIGURATION);
 	}
 

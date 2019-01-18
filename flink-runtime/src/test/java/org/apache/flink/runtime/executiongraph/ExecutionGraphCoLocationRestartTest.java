@@ -20,6 +20,7 @@ package org.apache.flink.runtime.executiongraph;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.runtime.concurrent.ScheduledExecutor;
+import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.restart.RestartCallback;
 import org.apache.flink.runtime.executiongraph.restart.RestartStrategy;
 import org.apache.flink.runtime.jobgraph.JobStatus;
@@ -31,8 +32,8 @@ import org.apache.flink.runtime.jobmaster.slotpool.SlotProvider;
 import org.apache.flink.util.FlinkException;
 
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+
+import java.util.function.Predicate;
 
 import static org.apache.flink.runtime.jobgraph.JobStatus.FINISHED;
 import static org.hamcrest.Matchers.equalTo;
@@ -44,14 +45,9 @@ import static org.junit.Assert.assertThat;
  * Additional {@link ExecutionGraph} restart tests {@link ExecutionGraphRestartTest} which
  * require the usage of a {@link SlotProvider}.
  */
-@RunWith(Parameterized.class)
 public class ExecutionGraphCoLocationRestartTest extends SchedulerTestBase {
 
 	private static final int NUM_TASKS = 31;
-
-	public ExecutionGraphCoLocationRestartTest(SchedulerType schedulerType) {
-		super(schedulerType);
-	}
 
 	@Test
 	public void testConstraintsAfterRestart() throws Exception {
@@ -76,18 +72,20 @@ public class ExecutionGraphCoLocationRestartTest extends SchedulerTestBase {
 			groupVertex,
 			groupVertex2);
 
-		if (schedulerType == SchedulerType.SLOT_POOL) {
-			// enable the queued scheduling for the slot pool
-			eg.setQueuedSchedulingAllowed(true);
-		}
+
+		// enable the queued scheduling for the slot pool
+		eg.setQueuedSchedulingAllowed(true);
+
 
 		assertEquals(JobStatus.CREATED, eg.getState());
 
 		eg.scheduleForExecution();
 
+		Predicate<Execution> isDeploying = ExecutionGraphTestUtils.isInExecutionState(ExecutionState.DEPLOYING);
+
 		ExecutionGraphTestUtils.waitForAllExecutionsPredicate(
 			eg,
-			ExecutionGraphTestUtils.hasResourceAssigned,
+			isDeploying,
 			timeout);
 
 		assertEquals(JobStatus.RUNNING, eg.getState());
@@ -102,7 +100,7 @@ public class ExecutionGraphCoLocationRestartTest extends SchedulerTestBase {
 
 		ExecutionGraphTestUtils.waitForAllExecutionsPredicate(
 			eg,
-			ExecutionGraphTestUtils.hasResourceAssigned,
+			isDeploying,
 			timeout);
 
 		//checking execution vertex properties
@@ -117,7 +115,7 @@ public class ExecutionGraphCoLocationRestartTest extends SchedulerTestBase {
 
 		ExecutionJobVertex[] tasks = eg.getAllVertices().values().toArray(new ExecutionJobVertex[2]);
 
-		for(int i = 0; i < NUM_TASKS; i++){
+		for (int i = 0; i < NUM_TASKS; i++) {
 			CoLocationConstraint constr1 = tasks[0].getTaskVertices()[i].getLocationConstraint();
 			CoLocationConstraint constr2 = tasks[1].getTaskVertices()[i].getLocationConstraint();
 			assertThat(constr1.isAssigned(), is(true));

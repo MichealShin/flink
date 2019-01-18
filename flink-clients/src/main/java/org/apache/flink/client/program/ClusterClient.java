@@ -90,6 +90,7 @@ import java.util.concurrent.TimeUnit;
 import scala.Option;
 import scala.concurrent.Await;
 import scala.concurrent.Future;
+import scala.concurrent.duration.Duration;
 import scala.concurrent.duration.FiniteDuration;
 
 /**
@@ -104,8 +105,8 @@ public abstract class ClusterClient<T> {
 	/** The optimizer used in the optimization of batch programs. */
 	final Optimizer compiler;
 
-	/** The actor system used to communicate with the JobManager. Lazily initialized upon first use */
-	protected final LazyActorSystemLoader actorSystemLoader;
+	/** The actor system used to communicate with the JobManager. */
+	protected final ActorSystemLoader actorSystemLoader;
 
 	/** Configuration of the client. */
 	protected final Configuration flinkConfig;
@@ -171,7 +172,10 @@ public abstract class ClusterClient<T> {
 	 * @param highAvailabilityServices HighAvailabilityServices to use for leader retrieval
 	 * @param sharedHaServices true if the HighAvailabilityServices are shared and must not be shut down
 	 */
-	public ClusterClient(Configuration flinkConfig, HighAvailabilityServices highAvailabilityServices, boolean sharedHaServices) {
+	public ClusterClient(
+			Configuration flinkConfig,
+			HighAvailabilityServices highAvailabilityServices,
+			boolean sharedHaServices) {
 		this.flinkConfig = Preconditions.checkNotNull(flinkConfig);
 		this.compiler = new Optimizer(new DataStatistics(), new DefaultCostEstimator(), flinkConfig);
 
@@ -188,6 +192,23 @@ public abstract class ClusterClient<T> {
 		this.sharedHaServices = sharedHaServices;
 	}
 
+	public ClusterClient(
+			Configuration flinkConfig,
+			HighAvailabilityServices highAvailabilityServices,
+			boolean sharedHaServices,
+			ActorSystemLoader actorSystemLoader) {
+		this.flinkConfig = Preconditions.checkNotNull(flinkConfig);
+		this.compiler = new Optimizer(new DataStatistics(), new DefaultCostEstimator(), flinkConfig);
+
+		this.timeout = AkkaUtils.getClientTimeout(flinkConfig);
+		this.lookupTimeout = AkkaUtils.getLookupTimeout(flinkConfig);
+
+		this.actorSystemLoader = Preconditions.checkNotNull(actorSystemLoader);
+
+		this.highAvailabilityServices = Preconditions.checkNotNull(highAvailabilityServices);
+		this.sharedHaServices = sharedHaServices;
+	}
+
 	// ------------------------------------------------------------------------
 	//  Startup & Shutdown
 	// ------------------------------------------------------------------------
@@ -195,7 +216,7 @@ public abstract class ClusterClient<T> {
 	/**
 	 * Utility class to lazily instantiate an {@link ActorSystem}.
 	 */
-	protected static class LazyActorSystemLoader {
+	protected static class LazyActorSystemLoader implements ActorSystemLoader {
 
 		private final Logger log;
 
@@ -226,10 +247,11 @@ public abstract class ClusterClient<T> {
 			return actorSystem != null;
 		}
 
-		public void shutdown() {
+		@Override
+		public void close() throws Exception {
 			if (isLoaded()) {
-				actorSystem.shutdown();
-				actorSystem.awaitTermination();
+				actorSystem.terminate();
+				Await.ready(actorSystem.whenTerminated(), Duration.Inf());
 				actorSystem = null;
 			}
 		}
@@ -239,6 +261,7 @@ public abstract class ClusterClient<T> {
 		 * @return ActorSystem
 		 * @throws Exception if the ActorSystem could not be created
 		 */
+		@Override
 		public ActorSystem get() throws FlinkException {
 
 			if (!isLoaded()) {
@@ -276,7 +299,7 @@ public abstract class ClusterClient<T> {
 	 */
 	public void shutdown() throws Exception {
 		synchronized (this) {
-			actorSystemLoader.shutdown();
+			actorSystemLoader.close();
 
 			if (!sharedHaServices && highAvailabilityServices != null) {
 				highAvailabilityServices.close();
@@ -605,7 +628,7 @@ public abstract class ClusterClient<T> {
 
 		Future<Object> response = jobManager.ask(JobManagerMessages.getRequestJobStatus(jobId), timeout);
 
-		CompletableFuture<Object> javaFuture = FutureUtils.<Object>toJava(response);
+		CompletableFuture<Object> javaFuture = FutureUtils.toJava(response);
 
 		return javaFuture.thenApply((responseMessage) -> {
 			if (responseMessage instanceof JobManagerMessages.CurrentJobStatus) {
@@ -648,7 +671,7 @@ public abstract class ClusterClient<T> {
 	 * @param jobId the job id
 	 * @param savepointDirectory directory the savepoint should be written to
 	 * @return path where the savepoint is located
-	 * @throws Exception In case an error cocurred.
+	 * @throws Exception In case an error occurred.
 	 */
 	public String cancelWithSavepoint(JobID jobId, @Nullable String savepointDirectory) throws Exception {
 		final ActorGateway jobManager = getJobManagerGateway();
@@ -712,7 +735,7 @@ public abstract class ClusterClient<T> {
 
 		Future<Object> response = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobId, Option.<String>apply(savepointDirectory)),
 			new FiniteDuration(1, TimeUnit.HOURS));
-		CompletableFuture<Object> responseFuture = FutureUtils.<Object>toJava(response);
+		CompletableFuture<Object> responseFuture = FutureUtils.toJava(response);
 
 		return responseFuture.thenApply((responseMessage) -> {
 			if (responseMessage instanceof JobManagerMessages.TriggerSavepointSuccess) {
@@ -732,7 +755,7 @@ public abstract class ClusterClient<T> {
 		final ActorGateway jobManager = getJobManagerGateway();
 
 		Object msg = new JobManagerMessages.DisposeSavepoint(savepointPath);
-		CompletableFuture<Object> responseFuture = FutureUtils.<Object>toJava(
+		CompletableFuture<Object> responseFuture = FutureUtils.toJava(
 			jobManager.ask(
 				msg,
 				timeout));
@@ -771,7 +794,7 @@ public abstract class ClusterClient<T> {
 		final ActorGateway jobManager = getJobManagerGateway();
 
 		Future<Object> response = jobManager.ask(new RequestJobDetails(true, false), timeout);
-		CompletableFuture<Object> responseFuture = FutureUtils.<Object>toJava(response);
+		CompletableFuture<Object> responseFuture = FutureUtils.toJava(response);
 
 		return responseFuture.thenApply((responseMessage) -> {
 			if (responseMessage instanceof MultipleJobsDetails) {

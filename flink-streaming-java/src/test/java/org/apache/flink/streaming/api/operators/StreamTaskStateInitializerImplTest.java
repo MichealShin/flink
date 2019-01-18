@@ -22,6 +22,8 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.core.fs.CloseableRegistry;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.runtime.checkpoint.JobManagerTaskRestore;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
@@ -46,6 +48,7 @@ import org.apache.flink.runtime.state.TaskStateManager;
 import org.apache.flink.runtime.state.TaskStateManagerImplTest;
 import org.apache.flink.runtime.state.TestTaskLocalStateStore;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
+import org.apache.flink.runtime.state.ttl.TtlTimeProvider;
 import org.apache.flink.runtime.taskmanager.TestCheckpointResponder;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.streaming.runtime.tasks.TestProcessingTimeService;
@@ -90,7 +93,8 @@ public class StreamTaskStateInitializerImplTest {
 			streamOperator.getClass().getSimpleName(),
 			streamOperator,
 			typeSerializer,
-			closeableRegistry);
+			closeableRegistry,
+			new UnregisteredMetricsGroup());
 
 		OperatorStateBackend operatorStateBackend = stateContext.operatorStateBackend();
 		AbstractKeyedStateBackend<?> keyedStateBackend = stateContext.keyedStateBackend();
@@ -138,7 +142,9 @@ public class StreamTaskStateInitializerImplTest {
 				String operatorIdentifier,
 				TypeSerializer<K> keySerializer,
 				int numberOfKeyGroups, KeyGroupRange keyGroupRange,
-				TaskKvStateRegistry kvStateRegistry) throws Exception {
+				TaskKvStateRegistry kvStateRegistry,
+				TtlTimeProvider ttlTimeProvider,
+				MetricGroup metricGroup) throws Exception {
 				return mock(AbstractKeyedStateBackend.class);
 			}
 
@@ -190,7 +196,8 @@ public class StreamTaskStateInitializerImplTest {
 			streamOperator.getClass().getSimpleName(),
 			streamOperator,
 			typeSerializer,
-			closeableRegistry);
+			closeableRegistry,
+			new UnregisteredMetricsGroup());
 
 		OperatorStateBackend operatorStateBackend = stateContext.operatorStateBackend();
 		AbstractKeyedStateBackend<?> keyedStateBackend = stateContext.keyedStateBackend();
