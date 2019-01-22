@@ -16,15 +16,20 @@
  * limitations under the License.
  */
 
-package org.apache.flink.runtime.taskmanager;
+package org.apache.flink.yarn;
+
+import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
 
 /**
- * A {@code Taskmanager} in the same package as the proper Flink {@link TaskManager}. We use this
- * to check whether Flink correctly uses the child-first {@link ClassLoader} when configured to do
- * so.
+ * Parallel data source that produces no data, i.e., finishes immediately.
  */
-public class TaskManager {
-	public static String getMessage() {
-		return "Hello, World!";
-	}
+public class NoDataSource implements ParallelSourceFunction<Integer> {
+
+	private static final long serialVersionUID = 1642561062000662861L;
+
+	@Override
+	public void run(SourceContext<Integer> ctx) {}
+
+	@Override
+	public void cancel() {}
 }
